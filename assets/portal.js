@@ -1,5 +1,7 @@
 // Rubi Workshop 고객 포털 (portal.rubiworkshop.com)
-// 고객 링크: https://portal.rubiworkshop.com/#키  (키는 my.rubiworkshop.com 견적 앱의 '고객 포털에 공개'에서 만들어짐)
+// 고객 링크: https://portal.rubiworkshop.com/#고객키  (my.rubiworkshop.com 견적 앱의 '고객 포털에 공개'에서 만들어짐)
+//   첫 화면: 그 고객의 '내 자전거' 목록 (my.rubiworkshop.com 첫 화면처럼 번호 목록 + 오른쪽 요약). 줄을 누르면 #고객키/견적키 로 상세
+//   예전에 보낸 견적 링크(#견적키)는 그 견적 상세만 엶
 // # 뒤는 서버로 가지 않으므로 GitHub·Cloudflare 접속 기록에 키가 남지 않음. 키로 Apps Script 의 portal 동작을 불러 정제 사본만 받음
 // 받는 내용은 Code.gs portalClean_ 가 허용한 칸뿐: 줄별 가격·할인율·내부 메모·이카운트 코드는 처음부터 없음
 (() => {
@@ -133,7 +135,8 @@ function specHtml(q) {
   </section>`;
 }
 
-function render(j) {
+function renderDetail(j, back) {
+  document.body.classList.remove('home');
   const q = j.quote;
   const stage = STAGES.includes(j.stage) ? j.stage : guessStage(q);
   const stages = j.stages || {};
@@ -141,6 +144,7 @@ function render(j) {
   document.title = `${title.join(' ') || 'Purchase Journey'} · Rubi Workshop`;
   const sections = [['journey', '진행'], ['pay', '결제'], ['quote', '견적'], ['kit', '구성'], ['spec', '사양']];
   const body = `
+  ${back ? `<a class="back" href="#${esc(back)}">← 내 자전거${state.items.length > 1 ? ` <small>${state.items.length}</small>` : ''}</a>` : ''}
   <section class="hero">
     <p class="lb">${esc(q.name ? q.name + ' 님의 빌드' : 'Your Build')}</p>
     <h1>${title.length ? title.map(esc).join('<br>') : esc(q.title || '자전거')}</h1>
@@ -154,6 +158,7 @@ function render(j) {
   ${q.memo ? `<section class="sec memo" aria-labelledby="h-memo"><h2 id="h-memo" class="sh"><span>안내</span></h2><p>${esc(q.memo)}</p></section>` : ''}
   <section class="sec ask"><p>구성이나 일정이 궁금하시면 ${q.owner ? esc(q.owner) + ' 담당에게 ' : ''}편하게 연락 주세요.</p>${SHOP.TEL ? `<a class="btn" href="tel:${esc(SHOP.TEL.replace(/[^\d]/g, ''))}">${esc(SHOP.TEL)} 전화하기</a>` : ''}</section>`;
   app.innerHTML = body;
+  window.scrollTo(0, 0);
   nav.innerHTML = sections.filter(([id]) => document.getElementById(id)).map(([id, l]) => `<a href="#" data-to="${id}">${l}</a>`).join('');
 }
 
@@ -164,17 +169,135 @@ nav.addEventListener('click', e => {
   const el = document.getElementById(a.dataset.to); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 
+// ─────────── 첫 화면: 내 자전거 ───────────
+// 단계로 세 묶음. 결제가 시작됐거나 계약 단계면 진행 중, 출고·루비케어는 출고, 나머지는 견적
+const LIVE = ['계약금', '예약금', '발주', '입고', '조립'];
+const stageOf = it => STAGES.includes(it.stage) ? it.stage : guessStage(it.quote);
+function groupOf(it) {
+  const st = stageOf(it);
+  if (st === '출고' || st === '루비케어') return 'done';
+  if (LIVE.includes(st) || it.quote.paid > 0) return 'live';
+  return 'quote';
+}
+const GROUPS = [['live', '진행 중'], ['quote', '견적'], ['done', '출고 · 루비케어']];
+const bikeTitle = q => [q.brand, q.model, q.color].filter(Boolean).join(' ') || q.title || '자전거';
+const state = { ckey: '', mode: '', items: [], name: '', q: '', sel: 0 };
+
+function homeList() {
+  const term = state.q.trim().toLowerCase();
+  const shown = state.items.filter(it => !term || [bikeTitle(it.quote), it.quote.title, it.quote.no, stageOf(it)].join(' ').toLowerCase().includes(term));
+  let n = 0;
+  const order = [];
+  const secs = GROUPS.map(([g, label]) => {
+    const rows = shown.filter(it => groupOf(it) === g);
+    if (!rows.length) return '';
+    return `<section class="hsec" aria-label="${esc(label)}"><h2><span>${esc(label)}</span><span>${rows.length}</span></h2><ol>${rows.map(it => {
+      n++; order.push(it.id);
+      const q = it.quote, st = stageOf(it);
+      const pct = q.total > 0 ? Math.round(Math.min(1, q.paid / q.total) * 100) : 0;
+      const pay = q.paid > 0 && q.remain <= 0 ? '결제 완료' : q.paid > 0 ? `결제 ${pct}%` : '';
+      const sub = [q.title, q.no, q.ship ? fmtDot(q.ship) + ' 출고' : ''].filter(Boolean).join(' · ');
+      return `<li><a class="hrow${n - 1 === state.sel ? ' on' : ''}" href="#${esc(state.ckey)}/${esc(it.id)}" data-i="${n - 1}">
+        <span class="no">${String(n).padStart(2, '0')}</span>
+        <span class="tt"><span class="nm">${esc(bikeTitle(q))}</span>${sub ? `<span class="sb">${esc(sub)}</span>` : ''}</span>
+        <span class="mt">${esc(st)}${pay ? `<i>·</i>${esc(pay)}` : ''}</span><span class="ar" aria-hidden="true">→</span></a></li>`;
+    }).join('')}</ol></section>`;
+  }).join('');
+  state.order = order;
+  return secs || '<p class="hnone">맞는 자전거가 없습니다.</p>';
+}
+
+function homeAside() {
+  const now = new Date();
+  const days = ['일', '월', '화', '수', '목', '금', '토'];
+  const reqs = state.items.map(it => {
+    const q = it.quote, rq = q.request || {};
+    const amt = rq.amount !== '' && rq.amount != null && +rq.amount > 0 ? +rq.amount : q.remain > 0 ? q.remain : 0;
+    return amt ? { it, amt, label: rq.label || '남은 금액' } : null;
+  }).filter(Boolean);
+  const bank = (state.items.find(it => it.bank) || {}).bank || '';
+  const cares = state.items.filter(it => it.quote.ship).map(it => ({ it, end: it.quote.care || careEnd(it.quote.ship) }));
+  const owners = [...new Set(state.items.map(it => it.quote.owner).filter(Boolean))];
+  return `<div class="ab"><p class="k">Today</p><p class="clock" id="clock">${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}</p>
+      <p class="dt">${now.getMonth() + 1}월 ${now.getDate()}일 ${days[now.getDay()]}요일</p>${SHOP.HOURS ? `<p class="sm">쇼룸 ${esc(SHOP.HOURS)}</p>` : ''}</div>
+    <div class="ab"><p class="k">Payment</p>${reqs.length ? reqs.map(r => `<a class="arow" href="#${esc(state.ckey)}/${esc(r.it.id)}"><span>${esc(r.label)}<small>${esc(bikeTitle(r.it.quote))}</small></span><b>${won(r.amt)}</b></a>`).join('')
+      + (bank ? `<p class="sm bank">입금 계좌 ${esc(bank)}</p>` : '') : '<p class="sm">결제하실 금액이 없습니다.</p>'}</div>
+    ${cares.length ? `<div class="ab"><p class="k">Rubi Care</p>${cares.map(c => `<a class="arow" href="#${esc(state.ckey)}/${esc(c.it.id)}"><span>${esc(bikeTitle(c.it.quote))}</span><b class="s">${c.end ? esc(fmtDot(c.end)) + '까지' : ''}</b></a>`).join('')}<p class="sm">무상 보증 기간에는 점검과 조정을 언제든 받으실 수 있습니다.</p></div>` : ''}
+    <div class="ab"><p class="k">Contact</p>${owners.length ? `<p class="arow"><span>담당</span><b class="s">${owners.map(esc).join(', ')}</b></p>` : ''}
+      ${SHOP.TEL ? `<a class="arow" href="tel:${esc(SHOP.TEL.replace(/[^\d]/g, ''))}"><span>전화</span><b class="s">${esc(SHOP.TEL)}</b></a>` : ''}
+      ${SHOP.ADDRESS ? `<p class="sm">${esc(SHOP.ADDRESS)}</p>` : ''}</div>`;
+}
+
+function renderHome() {
+  document.body.classList.add('home');
+  document.title = `${state.name ? state.name + ' 님의 자전거' : '내 자전거'} · Rubi Workshop`;
+  nav.innerHTML = '';
+  const many = state.items.length > 3;
+  app.innerHTML = `<div class="hwrap"><div class="hmain">
+      <p class="hk">${esc(state.name ? state.name + ' 님' : 'Purchase Journey')}</p>
+      ${many ? `<label class="hq"><span aria-hidden="true">/</span><input id="hq" value="${esc(state.q)}" placeholder="자전거 찾기" aria-label="자전거 찾기" autocomplete="off"></label>`
+        : `<h1 class="hh">내 자전거<small>${state.items.length}</small></h1>`}
+      <p class="keys"><kbd>↑</kbd><kbd>↓</kbd> 고르기 <kbd>Enter</kbd> 열기 <kbd>1</kbd>–<kbd>${Math.min(9, state.items.length)}</kbd> 바로 열기</p>
+      <div id="hlist">${homeList()}</div>
+    </div><aside class="haside" aria-label="요약">${homeAside()}</aside></div>`;
+  window.scrollTo(0, 0);
+}
+function paintList() { const el = document.getElementById('hlist'); if (el) el.innerHTML = homeList(); }
+
+document.addEventListener('input', e => { if (e.target.id === 'hq') { state.q = e.target.value; state.sel = 0; paintList(); } });
+document.addEventListener('keydown', e => {
+  const home = document.body.classList.contains('home');
+  if (!home) {
+    if (e.key === 'Escape' && state.mode === 'list') location.hash = '#' + state.ckey;
+    return;
+  }
+  const typing = e.target.id === 'hq';
+  const order = state.order || [];
+  if (e.key === '/' && !typing) { const q = document.getElementById('hq'); if (q) { e.preventDefault(); q.focus(); } return; }
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    if (!order.length) return;
+    e.preventDefault();
+    state.sel = (state.sel + (e.key === 'ArrowDown' ? 1 : -1) + order.length) % order.length; paintList();
+    const on = document.querySelector('.hrow.on'); if (on) on.scrollIntoView({ block: 'nearest' });
+    return;
+  }
+  if (e.key === 'Enter' && order[state.sel]) { e.preventDefault(); location.hash = `#${state.ckey}/${order[state.sel]}`; return; }
+  if (e.key === 'Escape' && typing && state.q) { state.q = ''; e.target.value = ''; paintList(); return; }
+  if (!typing && /^[1-9]$/.test(e.key) && order[+e.key - 1]) { location.hash = `#${state.ckey}/${order[+e.key - 1]}`; }
+});
+setInterval(() => { const c = document.getElementById('clock'); if (c) { const d = new Date(); c.textContent = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; } }, 20000);
+
+/** 주소: #고객키 (첫 화면) / #고객키/견적키 (상세) / #견적키 (예전 견적 링크) */
+function route() {
+  const [k, sub] = decodeURIComponent(location.hash.replace(/^#/, '')).split('/').map(x => (x || '').replace(/[^0-9a-f]/gi, ''));
+  return { k: k || '', sub: sub || '' };
+}
+
+async function fetchKey(k) {
+  const r = await fetch(`${CFG.API_URL}?action=portal&k=${encodeURIComponent(k)}`, { cache: 'no-store', referrerPolicy: 'no-referrer' });
+  return r.json();
+}
+
 async function load() {
   footer();
-  const key = decodeURIComponent(location.hash.replace(/^#/, '')).replace(/[^0-9a-f]/gi, '');
-  if (key.length < 32) { showMessage('링크를 확인해 주세요', `루비워크샵에서 보내 드린 링크 전체로 열어 주세요. 링크가 없으시면 ${esc(SHOP.TEL || '루비워크샵')}으로 연락 주세요.`); return; }
+  const { k, sub } = route();
+  if (k.length < 32) { document.body.classList.remove('home'); showMessage('링크를 확인해 주세요', `루비워크샵에서 보내 드린 링크 전체로 열어 주세요. 링크가 없으시면 ${esc(SHOP.TEL || '루비워크샵')}으로 연락 주세요.`); return; }
   if (!CFG.API_URL) { showMessage('준비 중입니다', '잠시 후 다시 열어 주세요.'); return; }
   try {
-    const r = await fetch(`${CFG.API_URL}?action=portal&k=${encodeURIComponent(key)}`, { cache: 'no-store', referrerPolicy: 'no-referrer' });
-    const j = await r.json();
-    if (!j.ok || !j.quote) { showMessage('열 수 없는 링크입니다', `링크가 바뀌었거나 공개가 끝났습니다. ${esc(SHOP.TEL || '루비워크샵')}으로 연락 주시면 새 링크를 보내 드립니다.`); return; }
-    render(j);
+    // 같은 키로 이미 받았으면 다시 받지 않음 (목록 ↔ 상세 오갈 때)
+    if (state.ckey !== k || !state.mode) {
+      const j = await fetchKey(k);
+      if (!j.ok) { document.body.classList.remove('home'); showMessage('열 수 없는 링크입니다', `링크가 바뀌었거나 공개가 끝났습니다. ${esc(SHOP.TEL || '루비워크샵')}으로 연락 주시면 새 링크를 보내 드립니다.`); return; }
+      state.ckey = k; state.mode = j.mode || 'one'; state.sel = 0; state.q = '';
+      state.items = j.mode === 'list' ? j.items : [Object.assign({ id: k }, j)];
+      state.name = j.mode === 'list' ? j.name : (j.quote && j.quote.name) || '';
+    }
+    if (state.mode !== 'list') { renderDetail(state.items[0], ''); return; }
+    const it = sub && state.items.find(x => x.id === sub);
+    if (it) renderDetail(it, state.ckey);
+    else renderHome();
   } catch (e) {
+    document.body.classList.remove('home');
     showMessage('잠시 연결이 원활하지 않습니다', '잠시 후 새로 고침해 주세요.');
   }
 }
@@ -182,5 +305,5 @@ async function load() {
 window.addEventListener('hashchange', load);
 load();
 // 확인용
-window.__portal = { render };
+window.__portal = { renderDetail, state };
 })();

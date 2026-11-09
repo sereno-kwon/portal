@@ -179,6 +179,11 @@ body.home .top{border-bottom:1px solid rgba(255,255,255,.12)}
 .grp .nm{font-size:14px;line-height:20px;word-break:keep-all;overflow-wrap:anywhere}
 .grp .nm small{color:var(--muted)}
 .grp .gf{font-size:12px;line-height:16px;padding:1px 6px;border:1px solid var(--gold);color:#8a6a35;white-space:nowrap}
+.grp .gf.ow,.removed .gf{border-color:var(--line);color:var(--muted)}
+.removed .grp li{grid-template-columns:minmax(0,1fr) auto}
+.removed .kit-grid{columns:1}
+.kit .note{text-align:left;margin-top:0!important}
+.tbl tr.rf td{color:var(--muted)}
 
 /* 빌드 사양 */
 .ids{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0;border-top:1px solid var(--fg);margin-bottom:36px}

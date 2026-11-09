@@ -4,7 +4,8 @@
 //   첫 화면: 그 고객의 '내 자전거' 목록 (my.rubiworkshop.com 첫 화면처럼 번호 목록 + 오른쪽 요약). 줄을 누르면 #b/견적키 로 상세
 //   직원 미리보기·예전 링크: #고객키, #고객키/견적키, #견적키 는 로그인 없이 그 키로 엶 (저장하지 않음)
 // # 뒤는 서버로 가지 않으므로 GitHub·Cloudflare 접속 기록에 키가 남지 않음. 키로 Apps Script 의 portal 동작을 불러 정제 사본만 받음
-// 받는 내용은 Code.gs portalClean_ 가 허용한 칸뿐: 줄별 가격·할인율·내부 메모·이카운트 코드는 처음부터 없음
+// 받는 내용은 Code.gs portalClean_ 가 허용한 칸뿐: 줄별 가격·할인율·원가·재고상태·증빙 번호·내부 메모·이카운트 코드는 처음부터 없음
+// 2026-11-09 판: 구성품의 '고객 지참' 표시, 떼어낸 부품(탈거품)과 처리, 업그레이드 견적 표시
 (() => {
 'use strict';
 
@@ -99,7 +100,7 @@ function payHtml(q, bank) {
       </div>
     </div>
     ${pays.length ? `<table class="tbl"><thead><tr><th scope="col">결제 내용</th><th scope="col">날짜</th><th scope="col">수단</th><th scope="col" class="n">금액</th></tr></thead>
-      <tbody>${pays.map(p => `<tr><td>${esc(p.label)}</td><td class="d">${esc(fmtKo(p.date))}</td><td class="m">${esc(p.method)}</td><td class="n">${comma(p.amount)}</td></tr>`).join('')}</tbody>
+      <tbody>${pays.map(p => `<tr${p.amount < 0 ? ' class="rf"' : ''}><td>${esc(p.label)}</td><td class="d">${esc(fmtKo(p.date))}</td><td class="m">${esc(p.method)}</td><td class="n">${paren(p.amount)}</td></tr>`).join('')}</tbody>
       <tfoot><tr><th scope="row" colspan="3">총 결제 금액</th><td class="n">${comma(q.paid)}</td></tr></tfoot></table>` : ''}
   </section>`;
 }
@@ -126,7 +127,18 @@ function kitHtml(q) {
   kit.forEach(k => { let g = groups[groups.length - 1]; if (!g || g.cat !== k.cat) groups.push(g = { cat: k.cat, items: [] }); g.items.push(k); });
   return `<section class="sec kit" id="kit" aria-labelledby="h-kit">
     <h2 id="h-kit" class="sh"><span>빌드 구성</span><small>${kit.length}개 품목</small></h2>
-    <div class="kit-grid">${groups.map(g => `<div class="grp"><h3>${esc(g.cat)}</h3><ul>${g.items.map(k => `<li><span class="sl">${esc(k.slot || '')}</span><span class="nm">${esc(k.name)}${k.qty > 1 ? ` <small>× ${esc(k.qty)}</small>` : ''}</span>${k.gift ? '<span class="gf">증정</span>' : ''}</li>`).join('')}</ul></div>`).join('')}</div>
+    <div class="kit-grid">${groups.map(g => `<div class="grp"><h3>${esc(g.cat)}</h3><ul>${g.items.map(k => `<li><span class="sl">${esc(k.slot || '')}</span><span class="nm">${esc(k.name)}${k.qty > 1 ? ` <small>× ${esc(k.qty)}</small>` : ''}</span>${k.own ? '<span class="gf ow">고객 지참</span>' : k.gift ? '<span class="gf">증정</span>' : ''}</li>`).join('')}</ul></div>`).join('')}</div>
+    ${kit.some(k => k.own) ? '<p class="note">고객 지참 부품은 고객님이 가져오신 부품이라 견적 금액에 들어가지 않습니다.</p>' : ''}
+  </section>`;
+}
+
+/** 떼어낸 부품: 업그레이드·리빌드로 뗀 부품과 처리 (고객 반환, 매장 보관 등) */
+function removedHtml(q) {
+  const rm = (q.removed || []).filter(x => x.name);
+  if (!rm.length) return '';
+  return `<section class="sec kit removed" id="removed" aria-labelledby="h-removed">
+    <h2 id="h-removed" class="sh"><span>떼어낸 부품</span><small>${rm.length}개</small></h2>
+    <div class="kit-grid"><div class="grp"><ul>${rm.map(x => `<li><span class="nm">${esc(x.name)}</span>${x.to ? `<span class="gf">${esc(x.to)}</span>` : ''}</li>`).join('')}</ul></div></div>
   </section>`;
 }
 
@@ -149,18 +161,19 @@ function renderDetail(j, back) {
   const stages = j.stages || {};
   const title = [q.brand, q.model, q.color].filter(Boolean);
   document.title = `${title.join(' ') || 'Purchase Journey'} · Rubi Workshop`;
-  const sections = [['journey', '진행'], ['pay', '결제'], ['quote', '견적'], ['kit', '구성'], ['spec', '사양']];
+  const sections = [['journey', '진행'], ['pay', '결제'], ['quote', '견적'], ['kit', '구성'], ['removed', '탈거품'], ['spec', '사양']];
   const body = `
   ${back ? `<a class="back" href="${esc(homeHref())}">← 내 자전거${state.items.length > 1 ? ` <small>${state.items.length}</small>` : ''}</a>` : ''}
   <section class="hero">
-    <p class="lb">${esc(q.name ? q.name + ' 님의 빌드' : 'Your Build')}</p>
+    <p class="lb">${esc(q.name ? q.name + ' 님의 ' + (q.kind || '빌드') : q.kind || 'Your Build')}</p>
     <h1>${title.length ? title.map(esc).join('<br>') : esc(q.title || '자전거')}</h1>
-    <p class="meta">${[q.owner ? '담당 ' + esc(q.owner) : '', j.publishedAt ? esc(fmtDot(j.publishedAt)) + ' 업데이트' : ''].filter(Boolean).join('<i>·</i>')}</p>
+    <p class="meta">${[q.kind && q.parentNo ? '원래 견적 ' + esc(q.parentNo) : '', q.owner ? '담당 ' + esc(q.owner) : '', j.publishedAt ? esc(fmtDot(j.publishedAt)) + ' 업데이트' : ''].filter(Boolean).join('<i>·</i>')}</p>
   </section>
   ${journeyHtml(q, stage, stages)}
   ${payHtml(q, j.bank)}
   ${quoteHtml(q)}
   ${kitHtml(q)}
+  ${removedHtml(q)}
   ${specHtml(q)}
   ${q.memo ? `<section class="sec memo" aria-labelledby="h-memo"><h2 id="h-memo" class="sh"><span>안내</span></h2><p>${esc(q.memo)}</p></section>` : ''}
   <section class="sec ask"><p>구성이나 일정이 궁금하시면 ${q.owner ? esc(q.owner) + ' 담당에게 ' : ''}편하게 연락 주세요.</p>${SHOP.TEL ? `<a class="btn" href="tel:${esc(SHOP.TEL.replace(/[^\d]/g, ''))}">${esc(SHOP.TEL)} 전화하기</a>` : ''}</section>`;
@@ -206,7 +219,7 @@ function homeList() {
       const q = it.quote, st = stageOf(it);
       const pct = q.total > 0 ? Math.round(Math.min(1, q.paid / q.total) * 100) : 0;
       const pay = q.paid > 0 && q.remain <= 0 ? '결제 완료' : q.paid > 0 ? `결제 ${pct}%` : '';
-      const sub = [q.title, q.no, q.ship ? fmtDot(q.ship) + ' 출고' : ''].filter(Boolean).join(' · ');
+      const sub = [q.kind && q.title !== q.kind ? q.kind : '', q.title, q.no, q.ship && !q.kind ? fmtDot(q.ship) + ' 출고' : ''].filter(Boolean).join(' · ');
       return `<li><a class="hrow${n - 1 === state.sel ? ' on' : ''}" href="${esc(itemHref(it.id))}" data-i="${n - 1}">
         <span class="no">${String(n).padStart(2, '0')}</span>
         <span class="tt"><span class="nm">${esc(bikeTitle(q))}</span>${sub ? `<span class="sb">${esc(sub)}</span>` : ''}</span>

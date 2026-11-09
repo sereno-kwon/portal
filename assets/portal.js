@@ -1,5 +1,5 @@
 // Rubi Workshop 고객 포털 (portal.rubiworkshop.com)
-// 로그인: 루비워크샵이 고객마다 발급한 고객코드(12자, 예: 7K3M-9QXP-H2DW). 맞으면 세션(고객 키)을 이 기기에 저장
+// 로그인: 루비워크샵이 고객마다 발급한 고객코드(RUBI-가입연도-임의 8자, 예: RUBI-2026-7K3M9QXP). 맞으면 세션(고객 키)을 이 기기에 저장
 //   (로그인 유지를 끄면 창을 닫을 때까지만). 코드를 다시 발급하면 세션이 끊겨 로그인 화면으로 돌아옴
 //   첫 화면: 그 고객의 '내 자전거' 목록 (my.rubiworkshop.com 첫 화면처럼 번호 목록 + 오른쪽 요약). 줄을 누르면 #b/견적키 로 상세
 //   직원 미리보기·예전 링크: #고객키, #고객키/견적키, #견적키 는 로그인 없이 그 키로 엶 (저장하지 않음)
@@ -284,7 +284,13 @@ document.addEventListener('keydown', e => {
 setInterval(() => { const c = document.getElementById('clock'); if (c) { const d = new Date(); c.textContent = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; } }, 20000);
 
 // ─────────── 로그인 (고객코드) ───────────
-const fmtCode = v => v.toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 12).replace(/(.{4})(?=.)/g, '$1-');
+/** 치는 대로 RUBI-2026-7K3M9QXP 꼴로 정리. RUBI 를 빼고 연도부터 쳐도 앞에 붙임 */
+function fmtCode(v) {
+  v = v.toUpperCase().replace(/[^0-9A-Z]/g, '');
+  if (v.length <= 4 && 'RUBI'.indexOf(v) === 0) return v;
+  const rest = (v.indexOf('RUBI') === 0 ? v.slice(4) : v).slice(0, 12);
+  return 'RUBI' + (rest ? '-' + rest.slice(0, 4) : '') + (rest.length > 4 ? '-' + rest.slice(4) : '');
+}
 function renderLogin(note) {
   document.body.classList.add('home'); document.body.dataset.view = 'login';
   document.title = '고객코드로 들어가기 · Rubi Workshop';
@@ -293,12 +299,12 @@ function renderLogin(note) {
       <p class="hk">Purchase Journey</p>
       <h1 class="hh">내 자전거 보기</h1>
       <form class="login" id="login" autocomplete="off" novalidate>
-        <label class="hq"><span aria-hidden="true">/</span><input id="code" inputmode="text" autocapitalize="characters" spellcheck="false" placeholder="고객코드 12자리" aria-label="고객코드" maxlength="14" autofocus></label>
+        <label class="hq"><span aria-hidden="true">/</span><input id="code" inputmode="text" autocapitalize="characters" spellcheck="false" placeholder="RUBI-2026-XXXXXXXX" aria-label="고객코드" maxlength="20" autofocus></label>
         <div class="lrow"><label class="keep"><input type="checkbox" id="keep" checked><span>이 기기에서 로그인 유지</span></label><button class="go" type="submit">들어가기 <span aria-hidden="true">→</span></button></div>
         <p class="lmsg" id="lmsg" role="status">${note ? esc(note) : ''}</p>
       </form>
       <div class="lhelp">
-        <p>고객코드는 루비워크샵이 고객님께 따로 보내 드린 12자리 코드입니다. 예: 7K3M-9QXP-H2DW</p>
+        <p>고객코드는 루비워크샵이 고객님께 따로 보내 드린 코드입니다. 예: RUBI-2026-7K3M9QXP</p>
         <p>대소문자와 하이픈은 상관없습니다. 코드를 잊으셨거나 받지 못하셨다면 ${SHOP.TEL ? `<a href="tel:${esc(SHOP.TEL.replace(/[^\d]/g, ''))}">${esc(SHOP.TEL)}</a>` : '루비워크샵'}으로 연락 주세요.</p>
         <p>공용 기기에서는 로그인 유지를 끄고, 다 보신 뒤 로그아웃해 주세요.</p>
       </div>
@@ -308,9 +314,9 @@ function renderLogin(note) {
   inp.addEventListener('input', () => { const p = inp.selectionStart === inp.value.length; inp.value = fmtCode(inp.value); if (p) inp.setSelectionRange(inp.value.length, inp.value.length); });
   document.getElementById('login').addEventListener('submit', async e => {
     e.preventDefault();
-    const code = inp.value.replace(/[^0-9A-Za-z]/g, '');
+    const code = fmtCode(inp.value).replace(/-/g, '');
     const m = document.getElementById('lmsg');
-    if (code.length !== 12) { m.textContent = '고객코드 12자리를 모두 넣어 주세요'; inp.focus(); return; }
+    if (code.length !== 16) { m.textContent = 'RUBI-연도-8자리 고객코드를 모두 넣어 주세요'; inp.focus(); return; }
     const btn = e.target.querySelector('.go'); btn.disabled = true; m.textContent = '확인하는 중입니다';
     try {
       const j = await api(`c=${encodeURIComponent(code)}`);

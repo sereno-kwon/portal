@@ -24,7 +24,8 @@ ul,ol{list-style:none;padding:0}
 .nav{display:flex;gap:20px;margin-left:auto;font-size:13px}
 .nav a{text-decoration:none;color:rgba(255,255,255,.7)}
 .nav a:hover{color:#fff}
-.top .kicker{font-size:12px;color:rgba(255,255,255,.5);white-space:nowrap}
+.top .kicker{margin-left:auto;font-size:12px;color:rgba(255,255,255,.5);white-space:nowrap}
+.nav:not(:empty) + .kicker{margin-left:0}
 
 main{max-width:var(--w);margin:0 auto;padding:0 var(--pad) 40px}
 .lb{font-size:12px;line-height:16px;color:var(--muted)}
@@ -71,6 +72,24 @@ body.home .top{border-bottom:1px solid rgba(255,255,255,.12)}
 .haside .arow b{font-weight:400;font-variant-numeric:tabular-nums;white-space:nowrap}
 .haside .arow b.s{font-size:13px;color:rgba(255,255,255,.75)}
 .haside a.arow:hover span{text-decoration:underline;text-underline-offset:4px}
+
+/* 로그인 (고객코드) */
+.top .out{margin-left:8px;height:30px;padding:0 12px;border:1px solid rgba(255,255,255,.3);background:transparent;color:#fff;font:inherit;font-size:12px;cursor:pointer}
+.top .out:hover{border-color:#fff}
+.top .out[hidden]{display:none}
+.login .hq{margin-top:40px}
+.login .hq input{letter-spacing:2px;font-variant-numeric:tabular-nums;text-transform:uppercase}
+.login .hq input::placeholder{letter-spacing:-1px;text-transform:none}
+.lrow{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:16px;margin-top:20px}
+.keep{display:flex;align-items:center;gap:8px;font-size:13px;color:rgba(255,255,255,.75);cursor:pointer}
+.keep input{margin:0;width:16px;height:16px;accent-color:#fff}
+.go{display:inline-flex;align-items:center;gap:10px;height:48px;padding:0 24px;border:none;background:#fff;color:var(--dark);font:inherit;font-size:15px;cursor:pointer}
+.go:disabled{opacity:.5;cursor:default}
+.go:hover:not(:disabled){background:#e9e9eb}
+.lmsg{min-height:20px;margin-top:16px!important;font-size:14px;line-height:20px;color:var(--gold)}
+.lhelp{margin-top:56px;padding-top:16px;border-top:1px solid rgba(255,255,255,.2);max-width:620px}
+.lhelp p{margin-top:8px;font-size:13px;line-height:20px;color:rgba(255,255,255,.6)}
+.lhelp a{color:#fff}
 
 /* 상세 위 '내 자전거'로 */
 .back{display:inline-flex;align-items:center;gap:6px;margin-top:28px;font-size:13px;line-height:18px;color:var(--muted);text-decoration:none}

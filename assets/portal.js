@@ -1,7 +1,8 @@
 // Rubi Workshop 고객 포털 (portal.rubiworkshop.com)
-// 고객 링크: https://portal.rubiworkshop.com/#고객키  (my.rubiworkshop.com 견적 앱의 '고객 포털에 공개'에서 만들어짐)
-//   첫 화면: 그 고객의 '내 자전거' 목록 (my.rubiworkshop.com 첫 화면처럼 번호 목록 + 오른쪽 요약). 줄을 누르면 #고객키/견적키 로 상세
-//   예전에 보낸 견적 링크(#견적키)는 그 견적 상세만 엶
+// 로그인: 루비워크샵이 고객마다 발급한 고객코드(12자, 예: 7K3M-9QXP-H2DW). 맞으면 세션(고객 키)을 이 기기에 저장
+//   (로그인 유지를 끄면 창을 닫을 때까지만). 코드를 다시 발급하면 세션이 끊겨 로그인 화면으로 돌아옴
+//   첫 화면: 그 고객의 '내 자전거' 목록 (my.rubiworkshop.com 첫 화면처럼 번호 목록 + 오른쪽 요약). 줄을 누르면 #b/견적키 로 상세
+//   직원 미리보기·예전 링크: #고객키, #고객키/견적키, #견적키 는 로그인 없이 그 키로 엶 (저장하지 않음)
 // # 뒤는 서버로 가지 않으므로 GitHub·Cloudflare 접속 기록에 키가 남지 않음. 키로 Apps Script 의 portal 동작을 불러 정제 사본만 받음
 // 받는 내용은 Code.gs portalClean_ 가 허용한 칸뿐: 줄별 가격·할인율·내부 메모·이카운트 코드는 처음부터 없음
 (() => {
@@ -11,6 +12,12 @@ const CFG = window.PORTAL_CONFIG || {};
 const SHOP = CFG.SHOP || {};
 const app = document.getElementById('app');
 const nav = document.getElementById('nav');
+const outBtn = document.getElementById('out');
+// 세션 (고객 키). 로그인 유지면 localStorage, 아니면 sessionStorage
+const SKEY = 'rubiPortal.session';
+const getSession = () => { try { return localStorage.getItem(SKEY) || sessionStorage.getItem(SKEY) || ''; } catch (e) { return ''; } };
+const setSession = (k, keep) => { try { (keep ? localStorage : sessionStorage).setItem(SKEY, k); } catch (e) {} };
+const clearSession = () => { try { localStorage.removeItem(SKEY); sessionStorage.removeItem(SKEY); } catch (e) {} };
 const foot = document.getElementById('foot');
 
 // 진행 단계 (my.rubiworkshop.com 고객관리와 같은 10단계)와 고객에게 보여줄 설명
@@ -43,7 +50,7 @@ function footer() {
     <p>${esc(SHOP.NAME || '')}${SHOP.ADDRESS ? ` · ${esc(SHOP.ADDRESS)}` : ''}</p>
     <p>${SHOP.TEL ? `<a href="tel:${esc(SHOP.TEL.replace(/[^\d]/g, ''))}">${esc(SHOP.TEL)}</a>` : ''}${SHOP.HOURS ? ` · ${esc(SHOP.HOURS)}` : ''}</p>
     <p class="ln">${SHOP.WEB ? `<a href="${esc(SHOP.WEB)}" rel="noopener">rubiworkshop.com</a>` : ''}${SHOP.INSTAGRAM ? `<a href="${esc(SHOP.INSTAGRAM)}" rel="noopener">Instagram</a>` : ''}</p>
-    <p class="conf">이 화면은 루비워크샵과 고객님 사이의 기밀 정보를 담고 있습니다. 링크를 다른 분께 전달하지 말아 주세요.</p>
+    <p class="conf">이 화면은 루비워크샵과 고객님 사이의 기밀 정보를 담고 있습니다. 고객코드와 화면 내용을 다른 분께 전달하지 말아 주세요.</p>
   </div>`;
 }
 
@@ -136,7 +143,7 @@ function specHtml(q) {
 }
 
 function renderDetail(j, back) {
-  document.body.classList.remove('home');
+  document.body.classList.remove('home'); document.body.dataset.view = 'detail';
   const q = j.quote;
   const stage = STAGES.includes(j.stage) ? j.stage : guessStage(q);
   const stages = j.stages || {};
@@ -144,7 +151,7 @@ function renderDetail(j, back) {
   document.title = `${title.join(' ') || 'Purchase Journey'} · Rubi Workshop`;
   const sections = [['journey', '진행'], ['pay', '결제'], ['quote', '견적'], ['kit', '구성'], ['spec', '사양']];
   const body = `
-  ${back ? `<a class="back" href="#${esc(back)}">← 내 자전거${state.items.length > 1 ? ` <small>${state.items.length}</small>` : ''}</a>` : ''}
+  ${back ? `<a class="back" href="${esc(homeHref())}">← 내 자전거${state.items.length > 1 ? ` <small>${state.items.length}</small>` : ''}</a>` : ''}
   <section class="hero">
     <p class="lb">${esc(q.name ? q.name + ' 님의 빌드' : 'Your Build')}</p>
     <h1>${title.length ? title.map(esc).join('<br>') : esc(q.title || '자전거')}</h1>
@@ -181,7 +188,10 @@ function groupOf(it) {
 }
 const GROUPS = [['live', '진행 중'], ['quote', '견적'], ['done', '출고 · 루비케어']];
 const bikeTitle = q => [q.brand, q.model, q.color].filter(Boolean).join(' ') || q.title || '자전거';
-const state = { ckey: '', mode: '', items: [], name: '', q: '', sel: 0 };
+const state = { ckey: '', mode: '', items: [], name: '', q: '', sel: 0, link: false };
+// 로그인으로 들어왔으면 주소에 키를 넣지 않음 (#b/견적키), 링크로 들어왔으면 키 그대로
+const homeHref = () => state.link ? '#' + state.ckey : '#';
+const itemHref = id => state.link ? `#${state.ckey}/${id}` : `#b/${id}`;
 
 function homeList() {
   const term = state.q.trim().toLowerCase();
@@ -197,7 +207,7 @@ function homeList() {
       const pct = q.total > 0 ? Math.round(Math.min(1, q.paid / q.total) * 100) : 0;
       const pay = q.paid > 0 && q.remain <= 0 ? '결제 완료' : q.paid > 0 ? `결제 ${pct}%` : '';
       const sub = [q.title, q.no, q.ship ? fmtDot(q.ship) + ' 출고' : ''].filter(Boolean).join(' · ');
-      return `<li><a class="hrow${n - 1 === state.sel ? ' on' : ''}" href="#${esc(state.ckey)}/${esc(it.id)}" data-i="${n - 1}">
+      return `<li><a class="hrow${n - 1 === state.sel ? ' on' : ''}" href="${esc(itemHref(it.id))}" data-i="${n - 1}">
         <span class="no">${String(n).padStart(2, '0')}</span>
         <span class="tt"><span class="nm">${esc(bikeTitle(q))}</span>${sub ? `<span class="sb">${esc(sub)}</span>` : ''}</span>
         <span class="mt">${esc(st)}${pay ? `<i>·</i>${esc(pay)}` : ''}</span><span class="ar" aria-hidden="true">→</span></a></li>`;
@@ -207,9 +217,18 @@ function homeList() {
   return secs || '<p class="hnone">맞는 자전거가 없습니다.</p>';
 }
 
-function homeAside() {
+function asideToday() {
   const now = new Date();
   const days = ['일', '월', '화', '수', '목', '금', '토'];
+  return `<div class="ab"><p class="k">Today</p><p class="clock" id="clock">${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}</p>
+      <p class="dt">${now.getMonth() + 1}월 ${now.getDate()}일 ${days[now.getDay()]}요일</p>${SHOP.HOURS ? `<p class="sm">쇼룸 ${esc(SHOP.HOURS)}</p>` : ''}</div>`;
+}
+function asideContact(owners) {
+  return `<div class="ab"><p class="k">Contact</p>${owners && owners.length ? `<p class="arow"><span>담당</span><b class="s">${owners.map(esc).join(', ')}</b></p>` : ''}
+      ${SHOP.TEL ? `<a class="arow" href="tel:${esc(SHOP.TEL.replace(/[^\d]/g, ''))}"><span>전화</span><b class="s">${esc(SHOP.TEL)}</b></a>` : ''}
+      ${SHOP.ADDRESS ? `<p class="sm">${esc(SHOP.ADDRESS)}</p>` : ''}</div>`;
+}
+function homeAside() {
   const reqs = state.items.map(it => {
     const q = it.quote, rq = q.request || {};
     const amt = rq.amount !== '' && rq.amount != null && +rq.amount > 0 ? +rq.amount : q.remain > 0 ? q.remain : 0;
@@ -218,18 +237,15 @@ function homeAside() {
   const bank = (state.items.find(it => it.bank) || {}).bank || '';
   const cares = state.items.filter(it => it.quote.ship).map(it => ({ it, end: it.quote.care || careEnd(it.quote.ship) }));
   const owners = [...new Set(state.items.map(it => it.quote.owner).filter(Boolean))];
-  return `<div class="ab"><p class="k">Today</p><p class="clock" id="clock">${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}</p>
-      <p class="dt">${now.getMonth() + 1}월 ${now.getDate()}일 ${days[now.getDay()]}요일</p>${SHOP.HOURS ? `<p class="sm">쇼룸 ${esc(SHOP.HOURS)}</p>` : ''}</div>
-    <div class="ab"><p class="k">Payment</p>${reqs.length ? reqs.map(r => `<a class="arow" href="#${esc(state.ckey)}/${esc(r.it.id)}"><span>${esc(r.label)}<small>${esc(bikeTitle(r.it.quote))}</small></span><b>${won(r.amt)}</b></a>`).join('')
+  return `${asideToday()}
+    <div class="ab"><p class="k">Payment</p>${reqs.length ? reqs.map(r => `<a class="arow" href="${esc(itemHref(r.it.id))}"><span>${esc(r.label)}<small>${esc(bikeTitle(r.it.quote))}</small></span><b>${won(r.amt)}</b></a>`).join('')
       + (bank ? `<p class="sm bank">입금 계좌 ${esc(bank)}</p>` : '') : '<p class="sm">결제하실 금액이 없습니다.</p>'}</div>
-    ${cares.length ? `<div class="ab"><p class="k">Rubi Care</p>${cares.map(c => `<a class="arow" href="#${esc(state.ckey)}/${esc(c.it.id)}"><span>${esc(bikeTitle(c.it.quote))}</span><b class="s">${c.end ? esc(fmtDot(c.end)) + '까지' : ''}</b></a>`).join('')}<p class="sm">무상 보증 기간에는 점검과 조정을 언제든 받으실 수 있습니다.</p></div>` : ''}
-    <div class="ab"><p class="k">Contact</p>${owners.length ? `<p class="arow"><span>담당</span><b class="s">${owners.map(esc).join(', ')}</b></p>` : ''}
-      ${SHOP.TEL ? `<a class="arow" href="tel:${esc(SHOP.TEL.replace(/[^\d]/g, ''))}"><span>전화</span><b class="s">${esc(SHOP.TEL)}</b></a>` : ''}
-      ${SHOP.ADDRESS ? `<p class="sm">${esc(SHOP.ADDRESS)}</p>` : ''}</div>`;
+    ${cares.length ? `<div class="ab"><p class="k">Rubi Care</p>${cares.map(c => `<a class="arow" href="${esc(itemHref(c.it.id))}"><span>${esc(bikeTitle(c.it.quote))}</span><b class="s">${c.end ? esc(fmtDot(c.end)) + '까지' : ''}</b></a>`).join('')}<p class="sm">무상 보증 기간에는 점검과 조정을 언제든 받으실 수 있습니다.</p></div>` : ''}
+    ${asideContact(owners)}`;
 }
 
 function renderHome() {
-  document.body.classList.add('home');
+  document.body.classList.add('home'); document.body.dataset.view = 'home';
   document.title = `${state.name ? state.name + ' 님의 자전거' : '내 자전거'} · Rubi Workshop`;
   nav.innerHTML = '';
   const many = state.items.length > 3;
@@ -246,9 +262,9 @@ function paintList() { const el = document.getElementById('hlist'); if (el) el.i
 
 document.addEventListener('input', e => { if (e.target.id === 'hq') { state.q = e.target.value; state.sel = 0; paintList(); } });
 document.addEventListener('keydown', e => {
-  const home = document.body.classList.contains('home');
+  const home = document.body.dataset.view === 'home';
   if (!home) {
-    if (e.key === 'Escape' && state.mode === 'list') location.hash = '#' + state.ckey;
+    if (e.key === 'Escape' && state.mode === 'list' && document.body.dataset.view === 'detail') location.hash = homeHref();
     return;
   }
   const typing = e.target.id === 'hq';
@@ -261,43 +277,105 @@ document.addEventListener('keydown', e => {
     const on = document.querySelector('.hrow.on'); if (on) on.scrollIntoView({ block: 'nearest' });
     return;
   }
-  if (e.key === 'Enter' && order[state.sel]) { e.preventDefault(); location.hash = `#${state.ckey}/${order[state.sel]}`; return; }
+  if (e.key === 'Enter' && order[state.sel]) { e.preventDefault(); location.hash = itemHref(order[state.sel]); return; }
   if (e.key === 'Escape' && typing && state.q) { state.q = ''; e.target.value = ''; paintList(); return; }
-  if (!typing && /^[1-9]$/.test(e.key) && order[+e.key - 1]) { location.hash = `#${state.ckey}/${order[+e.key - 1]}`; }
+  if (!typing && /^[1-9]$/.test(e.key) && order[+e.key - 1]) { location.hash = itemHref(order[+e.key - 1]); }
 });
 setInterval(() => { const c = document.getElementById('clock'); if (c) { const d = new Date(); c.textContent = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; } }, 20000);
 
-/** 주소: #고객키 (첫 화면) / #고객키/견적키 (상세) / #견적키 (예전 견적 링크) */
+// ─────────── 로그인 (고객코드) ───────────
+const fmtCode = v => v.toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 12).replace(/(.{4})(?=.)/g, '$1-');
+function renderLogin(note) {
+  document.body.classList.add('home'); document.body.dataset.view = 'login';
+  document.title = '고객코드로 들어가기 · Rubi Workshop';
+  nav.innerHTML = ''; outBtn.hidden = true;
+  app.innerHTML = `<div class="hwrap"><div class="hmain">
+      <p class="hk">Purchase Journey</p>
+      <h1 class="hh">내 자전거 보기</h1>
+      <form class="login" id="login" autocomplete="off" novalidate>
+        <label class="hq"><span aria-hidden="true">/</span><input id="code" inputmode="text" autocapitalize="characters" spellcheck="false" placeholder="고객코드 12자리" aria-label="고객코드" maxlength="14" autofocus></label>
+        <div class="lrow"><label class="keep"><input type="checkbox" id="keep" checked><span>이 기기에서 로그인 유지</span></label><button class="go" type="submit">들어가기 <span aria-hidden="true">→</span></button></div>
+        <p class="lmsg" id="lmsg" role="status">${note ? esc(note) : ''}</p>
+      </form>
+      <div class="lhelp">
+        <p>고객코드는 루비워크샵이 고객님께 따로 보내 드린 12자리 코드입니다. 예: 7K3M-9QXP-H2DW</p>
+        <p>대소문자와 하이픈은 상관없습니다. 코드를 잊으셨거나 받지 못하셨다면 ${SHOP.TEL ? `<a href="tel:${esc(SHOP.TEL.replace(/[^\d]/g, ''))}">${esc(SHOP.TEL)}</a>` : '루비워크샵'}으로 연락 주세요.</p>
+        <p>공용 기기에서는 로그인 유지를 끄고, 다 보신 뒤 로그아웃해 주세요.</p>
+      </div>
+    </div><aside class="haside" aria-label="요약">${asideToday()}${asideContact()}</aside></div>`;
+  window.scrollTo(0, 0);
+  const inp = document.getElementById('code');
+  inp.addEventListener('input', () => { const p = inp.selectionStart === inp.value.length; inp.value = fmtCode(inp.value); if (p) inp.setSelectionRange(inp.value.length, inp.value.length); });
+  document.getElementById('login').addEventListener('submit', async e => {
+    e.preventDefault();
+    const code = inp.value.replace(/[^0-9A-Za-z]/g, '');
+    const m = document.getElementById('lmsg');
+    if (code.length !== 12) { m.textContent = '고객코드 12자리를 모두 넣어 주세요'; inp.focus(); return; }
+    const btn = e.target.querySelector('.go'); btn.disabled = true; m.textContent = '확인하는 중입니다';
+    try {
+      const j = await api(`c=${encodeURIComponent(code)}`);
+      if (j.ok && j.session) {
+        setSession(j.session, document.getElementById('keep').checked);
+        take(j, j.session, false);
+        outBtn.hidden = false;
+        if (location.hash) location.hash = ''; else renderHome();
+        return;
+      }
+      m.textContent = j.error === 'busy' ? '잠시 후 다시 시도해 주세요' : `고객코드를 확인해 주세요. 맞는데도 안 되면 ${SHOP.TEL || '루비워크샵'}으로 연락 주세요`;
+    } catch (er) { m.textContent = '잠시 연결이 원활하지 않습니다. 다시 눌러 주세요'; }
+    btn.disabled = false; inp.focus(); inp.select();
+  });
+}
+outBtn.addEventListener('click', () => {
+  clearSession();
+  Object.assign(state, { ckey: '', mode: '', items: [], name: '', q: '', sel: 0, link: false });
+  if (location.hash) location.hash = ''; else renderLogin('로그아웃했습니다');
+});
+
+/** 주소: '' (첫 화면) / #b/견적키 (상세, 로그인) / #고객키 · #고객키/견적키 · #견적키 (직원 미리보기·예전 링크, 로그인 없이) */
 function route() {
-  const [k, sub] = decodeURIComponent(location.hash.replace(/^#/, '')).split('/').map(x => (x || '').replace(/[^0-9a-f]/gi, ''));
-  return { k: k || '', sub: sub || '' };
+  const raw = decodeURIComponent(location.hash.replace(/^#/, ''));
+  const b = raw.match(/^b\/([0-9a-f]+)$/i);
+  if (b) return { k: '', sub: b[1] };
+  const [k, sub] = raw.split('/').map(x => (x || '').replace(/[^0-9a-f]/gi, ''));
+  return k && k.length >= 32 ? { k, sub: sub || '' } : { k: '', sub: '' };
 }
 
-async function fetchKey(k) {
-  const r = await fetch(`${CFG.API_URL}?action=portal&k=${encodeURIComponent(k)}`, { cache: 'no-store', referrerPolicy: 'no-referrer' });
+async function api(q) {
+  const r = await fetch(`${CFG.API_URL}?action=portal&${q}`, { cache: 'no-store', referrerPolicy: 'no-referrer' });
   return r.json();
+}
+function take(j, key, link) {
+  state.ckey = key; state.mode = j.mode || 'one'; state.sel = 0; state.q = ''; state.link = link;
+  state.items = j.mode === 'list' ? j.items : [Object.assign({ id: key }, j)];
+  state.name = j.mode === 'list' ? j.name : (j.quote && j.quote.name) || '';
 }
 
 async function load() {
   footer();
-  const { k, sub } = route();
-  if (k.length < 32) { document.body.classList.remove('home'); showMessage('링크를 확인해 주세요', `루비워크샵에서 보내 드린 링크 전체로 열어 주세요. 링크가 없으시면 ${esc(SHOP.TEL || '루비워크샵')}으로 연락 주세요.`); return; }
   if (!CFG.API_URL) { showMessage('준비 중입니다', '잠시 후 다시 열어 주세요.'); return; }
+  const r = route();
+  const link = !!r.k;
+  const key = link ? r.k : getSession();
+  outBtn.hidden = link || !key;
+  if (!key) { renderLogin(); return; }
   try {
     // 같은 키로 이미 받았으면 다시 받지 않음 (목록 ↔ 상세 오갈 때)
-    if (state.ckey !== k || !state.mode) {
-      const j = await fetchKey(k);
-      if (!j.ok) { document.body.classList.remove('home'); showMessage('열 수 없는 링크입니다', `링크가 바뀌었거나 공개가 끝났습니다. ${esc(SHOP.TEL || '루비워크샵')}으로 연락 주시면 새 링크를 보내 드립니다.`); return; }
-      state.ckey = k; state.mode = j.mode || 'one'; state.sel = 0; state.q = '';
-      state.items = j.mode === 'list' ? j.items : [Object.assign({ id: k }, j)];
-      state.name = j.mode === 'list' ? j.name : (j.quote && j.quote.name) || '';
+    if (state.ckey !== key || !state.mode) {
+      const j = await api(`k=${encodeURIComponent(key)}`);
+      if (!j.ok) {
+        if (!link) { clearSession(); renderLogin('고객코드가 바뀌었거나 공개된 견적이 없습니다. 다시 로그인해 주세요'); return; }
+        document.body.classList.remove('home'); document.body.dataset.view = 'msg';
+        showMessage('열 수 없는 링크입니다', `링크가 바뀌었거나 공개가 끝났습니다. ${esc(SHOP.TEL || '루비워크샵')}으로 연락 주시면 고객코드로 들어오실 수 있게 안내해 드립니다.`); return;
+      }
+      take(j, key, link);
     }
     if (state.mode !== 'list') { renderDetail(state.items[0], ''); return; }
-    const it = sub && state.items.find(x => x.id === sub);
+    const it = r.sub && state.items.find(x => x.id === r.sub);
     if (it) renderDetail(it, state.ckey);
     else renderHome();
   } catch (e) {
-    document.body.classList.remove('home');
+    document.body.classList.remove('home'); document.body.dataset.view = 'msg';
     showMessage('잠시 연결이 원활하지 않습니다', '잠시 후 새로 고침해 주세요.');
   }
 }

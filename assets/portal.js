@@ -332,7 +332,8 @@ function renderLogin(note) {
     if (code.length !== 16) { m.textContent = 'RUBI-연도-8자리 고객코드를 모두 넣어 주세요'; inp.focus(); return; }
     const btn = e.target.querySelector('.go'); btn.disabled = true; m.textContent = '확인하는 중입니다';
     try {
-      const j = await api(`c=${encodeURIComponent(code)}`);
+      // code= (c= 는 Apps Script 예약 이름이라 스크립트에 닿지 않음)
+      const j = await api(`code=${encodeURIComponent(code)}`);
       if (j.ok && j.session) {
         setSession(j.session, document.getElementById('keep').checked);
         take(j, j.session, false);

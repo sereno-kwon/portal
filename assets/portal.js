@@ -6,6 +6,9 @@
 // # 뒤는 서버로 가지 않으므로 GitHub·Cloudflare 접속 기록에 키가 남지 않음. 키로 Apps Script 의 portal 동작을 불러 정제 사본만 받음
 // 받는 내용은 Code.gs portalClean_ 가 허용한 칸뿐: 줄별 가격·할인율·원가·재고상태·증빙 번호·내부 메모·이카운트 코드는 처음부터 없음
 // 2026-11-09 판: 구성품의 '고객 지참' 표시, 떼어낸 부품(탈거품)과 처리, 업그레이드 견적 표시
+// 2026-11-17 판: 갤러리. 직원이 my.rubiworkshop.com 고객관리 갤러리 탭에서 포털 공개로 둔 사진을 보고 원본을 내려받음
+//   사진 정보(파일 ID·이름·설명·크기)는 견적과 함께 오고, 미리보기와 원본은 같은 키로 portal&img=thumbs|full 을 불러 받음
+//   공개한 견적이 없는 고객 건의 사진(예전에 출고한 자전거)은 목록에 '사진' 묶음으로 따로 나옴 (#b/갤러리키)
 (() => {
 'use strict';
 
@@ -154,6 +157,201 @@ function specHtml(q) {
   </section>`;
 }
 
+// ─────────── 갤러리 ───────────
+const GAL_BATCH = 12;                  // Code.gs 의 GAL_BATCH 와 같게
+const thumbs = new Map();              // 사진 ID → 미리보기 data URL ('' 이면 못 불러옴)
+const fulls = new Map();               // 사진 ID → 원본 Blob (최근 몇 장만)
+const mobile = () => matchMedia('(pointer:coarse)').matches;
+const fmtMB = n => { n = +n || 0; return n >= 1048576 ? (n / 1048576).toFixed(n >= 104857600 ? 0 : 1) + 'MB' : n ? Math.max(1, Math.round(n / 1024)) + 'KB' : ''; };
+const totalBytes = list => list.reduce((m, g) => m + (+g.bytes || 0), 0);
+
+function galleryHtml(list, title) {
+  if (!list || !list.length) return '';
+  const size = fmtMB(totalBytes(list));
+  setTimeout(() => loadThumbs(list.map(g => g.id)), 0);
+  return `<section class="sec gal" id="gallery" aria-labelledby="h-gal">
+    <h2 id="h-gal" class="sh"><span>갤러리</span><small>${list.length}장</small></h2>
+    <ul class="gal-grid">${list.map((g, i) => {
+      const t = thumbs.get(g.id);
+      return `<li><button class="gth" type="button" data-gi="${i}" data-gid="${esc(g.id)}" aria-label="${esc(g.caption || g.name)} 크게 보기">${t ? `<img src="${esc(t)}" alt="${esc(g.caption || title || '')}">` : `<span class="ph">${t === '' ? '미리보기 없음' : ''}</span>`}</button>${g.caption ? `<p class="cap">${esc(g.caption)}</p>` : ''}</li>`;
+    }).join('')}</ul>
+    <div class="gal-act"><button class="gbtn" type="button" data-gall>${list.length > 1 ? '전체 내려받기' : '내려받기'}<small>${list.length}장${size ? ` · ${size}` : ''}</small></button>
+      <p>루비워크샵이 촬영한 원본 화질 그대로 내려받습니다.${mobile() ? ' 휴대폰에서는 공유 창에서 사진 앱에 저장할 수 있습니다.' : list.length > 1 ? ' 여러 장은 ZIP 파일 하나로 받습니다.' : ''}</p></div>
+  </section>`;
+}
+
+async function imgApi(q) {
+  const r = await fetch(`${CFG.API_URL}?action=portal&k=${encodeURIComponent(state.ckey)}&${q}`, { cache: 'no-store', referrerPolicy: 'no-referrer' });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || 'error');
+  return j;
+}
+/** 미리보기 12장씩. 그리기는 그 칸만 바꿈 */
+let thumbBusy = false;
+async function loadThumbs(ids) {
+  if (thumbBusy) return;
+  thumbBusy = true;
+  try {
+    for (;;) {
+      const need = ids.filter(id => !thumbs.has(id)).slice(0, GAL_BATCH);
+      if (!need.length) break;
+      try { const j = await imgApi(`img=thumbs&ids=${encodeURIComponent(need.join(','))}`); need.forEach(id => thumbs.set(id, (j.thumbs || {})[id] || '')); }
+      catch (e) { need.forEach(id => thumbs.set(id, '')); }
+      need.forEach(id => {
+        document.querySelectorAll(`[data-gid="${CSS.escape(id)}"]`).forEach(el => {
+          const t = thumbs.get(id);
+          el.innerHTML = t ? `<img src="${esc(t)}" alt="">` : '<span class="ph">미리보기 없음</span>';
+        });
+        if (lb && lb.list[lb.i] && lb.list[lb.i].id === id && !lb.url) paintLb();
+      });
+    }
+  } finally { thumbBusy = false; }
+}
+/** 원본 → File. 최근 6장만 기억 */
+async function fullFile(g) {
+  let b = fulls.get(g.id);
+  if (!b) {
+    const j = await imgApi(`img=full&fid=${encodeURIComponent(g.id)}`);
+    b = await (await fetch(j.image.url)).blob();
+    fulls.set(g.id, b);
+    if (fulls.size > 6) fulls.delete(fulls.keys().next().value);
+  }
+  return new File([b], g.name || 'rubi-workshop.jpg', { type: b.type || 'image/jpeg' });
+}
+const canShare = files => { try { return !!(navigator.canShare && navigator.canShare({ files })); } catch (e) { return false; } };
+function download(file) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file); a.download = file.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+/** 휴대폰은 공유 창(사진 앱에 저장), 컴퓨터는 파일로. 여러 장이면 컴퓨터는 ZIP 하나 */
+async function save(files, zipName) {
+  if (mobile() && canShare(files)) {
+    try { await navigator.share({ files }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  if (files.length === 1) download(files[0]);
+  else download(new File([await makeZip(files)], zipName, { type: 'application/zip' }));
+}
+const zipSlug = t => (String(t || '').toLowerCase().replace(/[\\/:*?"<>|]+/g, '').trim().replace(/\s+/g, '-') || 'photos');
+
+let curGallery = { list: [], title: '' };
+async function saveAll(btn) {
+  const list = curGallery.list; if (!list.length || btn.disabled) return;
+  const label = btn.innerHTML;
+  btn.disabled = true;
+  try {
+    const files = [];
+    for (let i = 0; i < list.length; i++) {
+      btn.innerHTML = `원본 받는 중<small>${i + 1} / ${list.length}</small>`;
+      files.push(await fullFile(list[i]));
+    }
+    btn.innerHTML = list.length > 1 && !(mobile() && canShare(files)) ? '파일 묶는 중<small>잠시만요</small>' : label;
+    await save(files, `rubi-workshop-${zipSlug(curGallery.title)}.zip`);
+  } catch (e) { alert('사진을 받지 못했습니다. 잠시 후 다시 눌러 주세요.'); }
+  btn.disabled = false; btn.innerHTML = label;
+}
+
+// 크게 보기: 미리보기를 먼저 띄우고 원본이 오면 바꿔 끼움. ←→·Esc, 휴대폰은 옆으로 밀기
+let lb = null;   // { list, i, url }
+const lbEl = document.createElement('div');
+lbEl.className = 'glb'; lbEl.hidden = true; lbEl.setAttribute('role', 'dialog'); lbEl.setAttribute('aria-modal', 'true'); lbEl.setAttribute('aria-label', '사진 크게 보기');
+document.body.appendChild(lbEl);
+function openLb(list, i) { lb = { list, i, url: '' }; lbEl.hidden = false; document.body.classList.add('lb-open'); paintLb(); loadFull(); }
+function closeLb() { if (lb && lb.url) URL.revokeObjectURL(lb.url); lb = null; lbEl.hidden = true; lbEl.innerHTML = ''; document.body.classList.remove('lb-open'); }
+function stepLb(d) { if (!lb || lb.list.length < 2) return; lb.i = (lb.i + d + lb.list.length) % lb.list.length; lb.url = ''; paintLb(); loadFull(); }
+async function loadFull() {
+  const want = lb && lb.list[lb.i]; if (!want) return;
+  try {
+    const f = await fullFile(want);
+    if (lb && lb.list[lb.i] === want) { if (lb.url) URL.revokeObjectURL(lb.url); lb.url = URL.createObjectURL(f); paintLb(); }
+  } catch (e) { /* 미리보기는 그대로 둠 */ }
+}
+function paintLb() {
+  if (!lb) return;
+  const g = lb.list[lb.i], src = lb.url || thumbs.get(g.id) || '';
+  const n = lb.list.length;
+  lbEl.innerHTML = `<div class="glb-in">
+    <div class="glb-top"><span>${n > 1 ? `${lb.i + 1} / ${n}` : ''}</span><button type="button" data-lbx aria-label="닫기">닫기</button></div>
+    <figure>${src ? `<img src="${esc(src)}" alt="${esc(g.caption || g.name)}">` : '<span class="ph">불러오는 중</span>'}</figure>
+    <div class="glb-bot"><p>${esc(g.caption || '')}<small>${esc([g.w && g.h ? `${g.w}×${g.h}` : '', fmtMB(g.bytes), lb.url ? '' : '원본 불러오는 중'].filter(Boolean).join(' · '))}</small></p>
+      <div class="glb-btns">${n > 1 ? '<button type="button" data-lbp aria-label="이전 사진">←</button><button type="button" data-lbn aria-label="다음 사진">→</button>' : ''}<button type="button" class="dl" data-lbd${lb.url ? '' : ' disabled'}>내려받기</button></div></div>
+  </div>`;
+}
+lbEl.addEventListener('click', async e => {
+  const t = e.target;
+  if (t.closest('[data-lbx]') || t === lbEl || t.classList.contains('glb-in') || t.tagName === 'FIGURE') { closeLb(); return; }
+  if (t.closest('[data-lbp]')) { stepLb(-1); return; }
+  if (t.closest('[data-lbn]')) { stepLb(1); return; }
+  const d = t.closest('[data-lbd]');
+  if (d && lb) { d.disabled = true; try { await save([await fullFile(lb.list[lb.i])]); } catch (er) { alert('사진을 받지 못했습니다. 잠시 후 다시 눌러 주세요.'); } d.disabled = false; }
+});
+document.addEventListener('keydown', e => {
+  if (!lb) return;
+  if (e.key === 'Escape') { e.stopImmediatePropagation(); closeLb(); }
+  else if (e.key === 'ArrowLeft') { e.stopImmediatePropagation(); stepLb(-1); }
+  else if (e.key === 'ArrowRight') { e.stopImmediatePropagation(); stepLb(1); }
+}, true);
+let touchX = null;
+lbEl.addEventListener('touchstart', e => { touchX = e.touches.length === 1 ? e.touches[0].clientX : null; }, { passive: true });
+lbEl.addEventListener('touchend', e => { if (touchX == null) return; const dx = e.changedTouches[0].clientX - touchX; touchX = null; if (Math.abs(dx) > 50) stepLb(dx < 0 ? 1 : -1); });
+app.addEventListener('click', e => {
+  const th = e.target.closest('[data-gi]'); if (th) { openLb(curGallery.list, +th.dataset.gi); return; }
+  const all = e.target.closest('[data-gall]'); if (all) saveAll(all);
+});
+
+// 압축 없는(store) ZIP. 사진은 이미 압축되어 있어서 그대로 담음. 파일 이름은 UTF-8 (my.rubiworkshop.com 스튜디오와 같은 방식)
+const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+const crc32 = u => { let c = 0xFFFFFFFF; for (let i = 0; i < u.length; i++) c = CRC[(c ^ u[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+async function makeZip(files) {
+  const enc = new TextEncoder(), parts = [], dir = [], used = {};
+  const d = new Date();
+  const time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  const date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  let off = 0;
+  for (const f of files) {
+    let nm = f.name; const m = nm.match(/^(.*?)(\.[^.]+)?$/);
+    for (let k = 2; used[nm]; k++) nm = `${m[1]} (${k})${m[2] || ''}`;
+    used[nm] = 1;
+    const name = enc.encode(nm), data = new Uint8Array(await f.arrayBuffer()), crc = crc32(data);
+    const h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint16(8, 0, true);
+    h.setUint16(10, time, true); h.setUint16(12, date, true); h.setUint32(14, crc, true);
+    h.setUint32(18, data.length, true); h.setUint32(22, data.length, true); h.setUint16(26, name.length, true); h.setUint16(28, 0, true);
+    parts.push(h.buffer, name, data);
+    const c = new DataView(new ArrayBuffer(46));
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true); c.setUint16(10, 0, true);
+    c.setUint16(12, time, true); c.setUint16(14, date, true); c.setUint32(16, crc, true);
+    c.setUint32(20, data.length, true); c.setUint32(24, data.length, true); c.setUint16(28, name.length, true);
+    c.setUint32(42, off, true);
+    dir.push(c.buffer, name);
+    off += 30 + name.length + data.length;
+  }
+  const dirSize = dir.reduce((m, p) => m + p.byteLength, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true);
+  end.setUint32(12, dirSize, true); end.setUint32(16, off, true);
+  return new Blob([...parts, ...dir, end.buffer], { type: 'application/zip' });
+}
+
+/** 공개한 견적 없이 사진만 있는 고객 건 (예전에 출고한 자전거) */
+function renderGallery(g, back) {
+  document.body.classList.remove('home'); document.body.dataset.view = 'detail';
+  document.title = `${g.title} · Rubi Workshop`;
+  curGallery = { list: g.images || [], title: g.title };
+  app.innerHTML = `
+  ${back ? `<a class="back" href="${esc(homeHref())}">← 내 자전거</a>` : ''}
+  <section class="hero">
+    <p class="lb">${esc(state.name ? state.name + ' 님의 자전거' : 'Your Bike')}</p>
+    <h1>${esc(g.title)}</h1>
+    <p class="meta">${[g.ship ? esc(fmtDot(g.ship)) + ' 출고' : '', g.stage && !g.ship ? esc(g.stage) : '', `사진 ${(g.images || []).length}장`].filter(Boolean).join('<i>·</i>')}</p>
+  </section>
+  ${galleryHtml(g.images, g.title)}
+  <section class="sec ask"><p>사진이나 자전거에 대해 궁금하시면 편하게 연락 주세요.</p>${SHOP.TEL ? `<a class="btn" href="tel:${esc(SHOP.TEL.replace(/[^\d]/g, ''))}">${esc(SHOP.TEL)} 전화하기</a>` : ''}</section>`;
+  window.scrollTo(0, 0);
+  nav.innerHTML = '';
+}
+
 function renderDetail(j, back) {
   document.body.classList.remove('home'); document.body.dataset.view = 'detail';
   const q = j.quote;
@@ -161,14 +359,16 @@ function renderDetail(j, back) {
   const stages = j.stages || {};
   const title = [q.brand, q.model, q.color].filter(Boolean);
   document.title = `${title.join(' ') || 'Purchase Journey'} · Rubi Workshop`;
-  const sections = [['journey', '진행'], ['pay', '결제'], ['quote', '견적'], ['kit', '구성'], ['removed', '탈거품'], ['spec', '사양']];
+  const sections = [['gallery', '사진'], ['journey', '진행'], ['pay', '결제'], ['quote', '견적'], ['kit', '구성'], ['removed', '탈거품'], ['spec', '사양']];
+  curGallery = { list: j.gallery || [], title: title.join(' ') || q.title || '' };
   const body = `
   ${back ? `<a class="back" href="${esc(homeHref())}">← 내 자전거${state.items.length > 1 ? ` <small>${state.items.length}</small>` : ''}</a>` : ''}
   <section class="hero">
     <p class="lb">${esc(q.name ? q.name + ' 님의 ' + (q.kind || '빌드') : q.kind || 'Your Build')}</p>
     <h1>${title.length ? title.map(esc).join('<br>') : esc(q.title || '자전거')}</h1>
-    <p class="meta">${[q.kind && q.parentNo ? '원래 견적 ' + esc(q.parentNo) : '', q.owner ? '담당 ' + esc(q.owner) : '', j.publishedAt ? esc(fmtDot(j.publishedAt)) + ' 업데이트' : ''].filter(Boolean).join('<i>·</i>')}</p>
+    <p class="meta">${[q.kind && q.parentNo ? '원래 견적 ' + esc(q.parentNo) : '', q.owner ? '담당 ' + esc(q.owner) : '', j.publishedAt ? esc(fmtDot(j.publishedAt)) + ' 업데이트' : '', (j.gallery || []).length ? `<a href="#" data-to="gallery">사진 ${j.gallery.length}장</a>` : ''].filter(Boolean).join('<i>·</i>')}</p>
   </section>
+  ${galleryHtml(j.gallery, title.join(' '))}
   ${journeyHtml(q, stage, stages)}
   ${payHtml(q, j.bank)}
   ${quoteHtml(q)}
@@ -183,11 +383,13 @@ function renderDetail(j, back) {
 }
 
 // 위 메뉴: 주소의 # 은 키라서 바꾸지 않고 스크롤만
-nav.addEventListener('click', e => {
+const toSection = e => {
   const a = e.target.closest('[data-to]'); if (!a) return;
   e.preventDefault();
   const el = document.getElementById(a.dataset.to); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-});
+};
+nav.addEventListener('click', toSection);
+app.addEventListener('click', toSection);
 
 // ─────────── 첫 화면: 내 자전거 ───────────
 // 단계로 세 묶음. 결제가 시작됐거나 계약 단계면 진행 중, 출고·루비케어는 출고, 나머지는 견적
@@ -201,7 +403,7 @@ function groupOf(it) {
 }
 const GROUPS = [['live', '진행 중'], ['quote', '견적'], ['done', '출고 · 루비케어']];
 const bikeTitle = q => [q.brand, q.model, q.color].filter(Boolean).join(' ') || q.title || '자전거';
-const state = { ckey: '', mode: '', items: [], name: '', q: '', sel: 0, link: false };
+const state = { ckey: '', mode: '', items: [], galleries: [], name: '', q: '', sel: 0, link: false };
 // 로그인으로 들어왔으면 주소에 키를 넣지 않음 (#b/견적키), 링크로 들어왔으면 키 그대로
 const homeHref = () => state.link ? '#' + state.ckey : '#';
 const itemHref = id => state.link ? `#${state.ckey}/${id}` : `#b/${id}`;
@@ -223,11 +425,20 @@ function homeList() {
       return `<li><a class="hrow${n - 1 === state.sel ? ' on' : ''}" href="${esc(itemHref(it.id))}" data-i="${n - 1}">
         <span class="no">${String(n).padStart(2, '0')}</span>
         <span class="tt"><span class="nm">${esc(bikeTitle(q))}</span>${sub ? `<span class="sb">${esc(sub)}</span>` : ''}</span>
-        <span class="mt">${esc(st)}${pay ? `<i>·</i>${esc(pay)}` : ''}</span><span class="ar" aria-hidden="true">→</span></a></li>`;
+        <span class="mt">${esc(st)}${pay ? `<i>·</i>${esc(pay)}` : ''}${(it.gallery || []).length ? `<i>·</i>사진 ${it.gallery.length}` : ''}</span><span class="ar" aria-hidden="true">→</span></a></li>`;
     }).join('')}</ol></section>`;
   }).join('');
+  // 사진만 있는 자전거 (공개한 견적이 없는 예전 출고 건)
+  const gals = (state.galleries || []).filter(g => !term || [g.title, '사진'].join(' ').toLowerCase().includes(term));
+  const photo = gals.length ? `<section class="hsec" aria-label="사진"><h2><span>사진</span><span>${gals.length}</span></h2><ol>${gals.map(g => {
+    n++; order.push(g.id);
+    return `<li><a class="hrow${n - 1 === state.sel ? ' on' : ''}" href="${esc(itemHref(g.id))}" data-i="${n - 1}">
+      <span class="no">${String(n).padStart(2, '0')}</span>
+      <span class="tt"><span class="nm">${esc(g.title)}</span>${g.ship ? `<span class="sb">${esc(fmtDot(g.ship))} 출고</span>` : ''}</span>
+      <span class="mt">사진 ${(g.images || []).length}장</span><span class="ar" aria-hidden="true">→</span></a></li>`;
+  }).join('')}</ol></section>` : '';
   state.order = order;
-  return secs || '<p class="hnone">맞는 자전거가 없습니다.</p>';
+  return (secs + photo) || '<p class="hnone">맞는 자전거가 없습니다.</p>';
 }
 
 function asideToday() {
@@ -253,20 +464,29 @@ function homeAside() {
   return `${asideToday()}
     <div class="ab"><p class="k">Payment</p>${reqs.length ? reqs.map(r => `<a class="arow" href="${esc(itemHref(r.it.id))}"><span>${esc(r.label)}<small>${esc(bikeTitle(r.it.quote))}</small></span><b>${won(r.amt)}</b></a>`).join('')
       + (bank ? `<p class="sm bank">입금 계좌 ${esc(bank)}</p>` : '') : '<p class="sm">결제하실 금액이 없습니다.</p>'}</div>
+    ${galAside()}
     ${cares.length ? `<div class="ab"><p class="k">Rubi Care</p>${cares.map(c => `<a class="arow" href="${esc(itemHref(c.it.id))}"><span>${esc(bikeTitle(c.it.quote))}</span><b class="s">${c.end ? esc(fmtDot(c.end)) + '까지' : ''}</b></a>`).join('')}<p class="sm">무상 보증 기간에는 점검과 조정을 언제든 받으실 수 있습니다.</p></div>` : ''}
     ${asideContact(owners)}`;
+}
+
+/** 오른쪽 Gallery: 사진이 있는 자전거와 장수 */
+function galAside() {
+  const rows = state.items.filter(it => (it.gallery || []).length).map(it => ({ id: it.id, title: bikeTitle(it.quote), n: it.gallery.length }))
+    .concat((state.galleries || []).map(g => ({ id: g.id, title: g.title, n: (g.images || []).length })));
+  if (!rows.length) return '';
+  return `<div class="ab"><p class="k">Gallery</p>${rows.map(r => `<a class="arow" href="${esc(itemHref(r.id))}"><span>${esc(r.title)}</span><b class="s">사진 ${r.n}장</b></a>`).join('')}<p class="sm">원본 화질로 내려받으실 수 있습니다.</p></div>`;
 }
 
 function renderHome() {
   document.body.classList.add('home'); document.body.dataset.view = 'home';
   document.title = `${state.name ? state.name + ' 님의 자전거' : '내 자전거'} · Rubi Workshop`;
   nav.innerHTML = '';
-  const many = state.items.length > 3;
+  const many = state.items.length + (state.galleries || []).length > 3;
   app.innerHTML = `<div class="hwrap"><div class="hmain">
       <p class="hk">${esc(state.name ? state.name + ' 님' : 'Purchase Journey')}</p>
       ${many ? `<label class="hq"><span aria-hidden="true">/</span><input id="hq" value="${esc(state.q)}" placeholder="자전거 찾기" aria-label="자전거 찾기" autocomplete="off"></label>`
-        : `<h1 class="hh">내 자전거<small>${state.items.length}</small></h1>`}
-      <p class="keys"><kbd>↑</kbd><kbd>↓</kbd> 고르기 <kbd>Enter</kbd> 열기 <kbd>1</kbd>–<kbd>${Math.min(9, state.items.length)}</kbd> 바로 열기</p>
+        : `<h1 class="hh">내 자전거<small>${state.items.length + (state.galleries || []).length}</small></h1>`}
+      <p class="keys"><kbd>↑</kbd><kbd>↓</kbd> 고르기 <kbd>Enter</kbd> 열기 <kbd>1</kbd>–<kbd>${Math.min(9, state.items.length + (state.galleries || []).length)}</kbd> 바로 열기</p>
       <div id="hlist">${homeList()}</div>
     </div><aside class="haside" aria-label="요약">${homeAside()}</aside></div>`;
   window.scrollTo(0, 0);
@@ -348,7 +568,8 @@ function renderLogin(note) {
 }
 outBtn.addEventListener('click', () => {
   clearSession();
-  Object.assign(state, { ckey: '', mode: '', items: [], name: '', q: '', sel: 0, link: false });
+  Object.assign(state, { ckey: '', mode: '', items: [], galleries: [], name: '', q: '', sel: 0, link: false });
+  thumbs.clear(); fulls.clear(); closeLb();
   if (location.hash) location.hash = ''; else renderLogin('로그아웃했습니다');
 });
 
@@ -368,6 +589,7 @@ async function api(q) {
 function take(j, key, link) {
   state.ckey = key; state.mode = j.mode || 'one'; state.sel = 0; state.q = ''; state.link = link;
   state.items = j.mode === 'list' ? j.items : [Object.assign({ id: key }, j)];
+  state.galleries = j.mode === 'list' ? (j.galleries || []) : [];
   state.name = j.mode === 'list' ? j.name : (j.quote && j.quote.name) || '';
 }
 
@@ -392,7 +614,9 @@ async function load() {
     }
     if (state.mode !== 'list') { renderDetail(state.items[0], ''); return; }
     const it = r.sub && state.items.find(x => x.id === r.sub);
+    const gl = r.sub && !it && state.galleries.find(x => x.id === r.sub);
     if (it) renderDetail(it, state.ckey);
+    else if (gl) renderGallery(gl, state.ckey);
     else renderHome();
   } catch (e) {
     document.body.classList.remove('home'); document.body.dataset.view = 'msg';
@@ -400,7 +624,7 @@ async function load() {
   }
 }
 
-window.addEventListener('hashchange', load);
+window.addEventListener('hashchange', () => { closeLb(); load(); });
 load();
 // 확인용
 window.__portal = { renderDetail, state };

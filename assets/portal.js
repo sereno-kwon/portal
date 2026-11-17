@@ -462,10 +462,10 @@ function homeAside() {
   const cares = state.items.filter(it => it.quote.ship).map(it => ({ it, end: it.quote.care || careEnd(it.quote.ship) }));
   const owners = [...new Set(state.items.map(it => it.quote.owner).filter(Boolean))];
   return `${asideToday()}
-    <div class="ab"><p class="k">Payment</p>${reqs.length ? reqs.map(r => `<a class="arow" href="${esc(itemHref(r.it.id))}"><span>${esc(r.label)}<small>${esc(bikeTitle(r.it.quote))}</small></span><b>${won(r.amt)}</b></a>`).join('')
+    <div class="ab"><p class="k hl">Payment</p>${reqs.length ? reqs.map(r => `<a class="arow" href="${esc(itemHref(r.it.id))}"><span>${esc(r.label)}<small>${esc(bikeTitle(r.it.quote))}</small></span><b>${won(r.amt)}</b></a>`).join('')
       + (bank ? `<p class="sm bank">입금 계좌 ${esc(bank)}</p>` : '') : '<p class="sm">결제하실 금액이 없습니다.</p>'}</div>
     ${galAside()}
-    ${cares.length ? `<div class="ab"><p class="k">Rubi Care</p>${cares.map(c => `<a class="arow" href="${esc(itemHref(c.it.id))}"><span>${esc(bikeTitle(c.it.quote))}</span><b class="s">${c.end ? esc(fmtDot(c.end)) + '까지' : ''}</b></a>`).join('')}<p class="sm">무상 보증 기간에는 점검과 조정을 언제든 받으실 수 있습니다.</p></div>` : ''}
+    ${cares.length ? `<div class="ab"><p class="k hl">Rubi Care</p>${cares.map(c => `<a class="arow" href="${esc(itemHref(c.it.id))}"><span>${esc(bikeTitle(c.it.quote))}</span><b class="s">${c.end ? esc(fmtDot(c.end)) + '까지' : ''}</b></a>`).join('')}<p class="sm">무상 보증 기간에는 점검과 조정을 언제든 받으실 수 있습니다.</p></div>` : ''}
     ${asideContact(owners)}`;
 }
 
@@ -474,7 +474,7 @@ function galAside() {
   const rows = state.items.filter(it => (it.gallery || []).length).map(it => ({ id: it.id, title: bikeTitle(it.quote), n: it.gallery.length }))
     .concat((state.galleries || []).map(g => ({ id: g.id, title: g.title, n: (g.images || []).length })));
   if (!rows.length) return '';
-  return `<div class="ab"><p class="k">Gallery</p>${rows.map(r => `<a class="arow" href="${esc(itemHref(r.id))}"><span>${esc(r.title)}</span><b class="s">사진 ${r.n}장</b></a>`).join('')}<p class="sm">원본 화질로 내려받으실 수 있습니다.</p></div>`;
+  return `<div class="ab"><p class="k hl">Gallery</p>${rows.map(r => `<a class="arow" href="${esc(itemHref(r.id))}"><span>${esc(r.title)}</span><b class="s">사진 ${r.n}장</b></a>`).join('')}<p class="sm">원본 화질로 내려받으실 수 있습니다.</p></div>`;
 }
 
 function renderHome() {

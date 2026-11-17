@@ -63,6 +63,7 @@ body.home .top{border-bottom:1px solid rgba(255,255,255,.12)}
 .haside .ab{padding:18px 0 28px;border-top:1px solid #fff}
 .haside .ab + .ab{border-top-color:rgba(255,255,255,.35)}
 .haside .k{margin-bottom:12px;font-size:12px;line-height:16px;color:rgba(255,255,255,.6)}
+.haside .k.hl{color:var(--gold)}
 .haside .clock{font-size:64px;line-height:68px;letter-spacing:-2px;font-variant-numeric:tabular-nums}
 .haside .dt{margin-top:10px;font-size:15px}
 .haside .sm{margin-top:6px;font-size:13px;line-height:18px;color:rgba(255,255,255,.6)}
